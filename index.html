@@ -18,7 +18,7 @@
     h2 { margin-top: 0; font-size: 1.15rem; color: #1a202c; border-bottom: 2px solid #edf2f7; padding-bottom: 10px; }
     
     /* 1단계 텍스트 에디터 레이아웃 */
-    .editor-layout { display: flex; gap: 16px; height: 320px; }
+    .editor-layout { display: flex; gap: 16px; height: 350px; }
     textarea { flex: 2; height: 100%; padding: 12px; font-family: "Consolas", "Courier New", monospace; font-size: 0.95rem; border: 1px solid #cbd5e0; border-radius: 8px; resize: none; line-height: 1.5; }
     textarea:focus { outline: none; border-color: #3182ce; box-shadow: 0 0 0 3px rgba(49,130,206,0.2); }
     
@@ -28,7 +28,7 @@
     .keyword-item:hover { background: #bee3f8; }
 
     /* 2단계 그리드 레이아웃 */
-    #myGrid { height: 350px; width: 100%; }
+    #myGrid { height: 380px; width: 100%; }
 
     /* 3단계 DB 테이블 선택 레이아웃 */
     .table-selection-zone { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
@@ -56,11 +56,11 @@
   
   <!-- Step 1: 텍스트 수정 및 키워드 모아보기 -->
   <div class="card">
-    <h2>1. 스토리 텍스트 편집 (특수 줄 모아보기)</h2>
+    <h2>1. 스토리 텍스트 편집 (장소, 일러, CG 등 감지)</h2>
     <div class="editor-layout">
-      <textarea id="rawText" placeholder="텍스트를 붙여넣으세요...&#10;&#10;[장소: 강당]&#10;캐릭터A&#10;안녕하세요!&#10;&#10;캐릭터B&#10;반갑습니다.&#10;&#10;[CG: cg_event_01.png]&#10;캐릭터A&#10;오늘 날씨가 좋네요."></textarea>
+      <textarea id="rawText" placeholder="스토리 텍스트를 붙여넣으세요..."></textarea>
       <div class="keyword-sidebar">
-        <div class="keyword-title">📌 키워드 감지 줄 ([장소], [CG] 등)</div>
+        <div class="keyword-title">📌 감지된 지문/메타 키워드</div>
         <div id="keywordList"></div>
       </div>
     </div>
@@ -69,7 +69,7 @@
 
   <!-- Step 2: 웹 스프레드시트 (AG Grid) -->
   <div class="card">
-    <h2>2. 작업용 스프레드시트 (셀 직접 수정 및 검수)</h2>
+    <h2>2. 작업용 스프레드시트 (검수 및 직접 수정)</h2>
     <div id="myGrid" class="ag-theme-alpine"></div>
   </div>
 
@@ -86,7 +86,7 @@
           <button class="btn-table" onclick="selectTable('episodes')">episodes</button>
           <button class="btn-table" onclick="selectTable('episode_characters')">episode_characters</button>
           <button class="btn-table" onclick="selectTable('cgs')">cgs</button>
-          <button class="btn-table" onclick="selectTable('scripts')">scripts</button>
+          <button class="btn-table active" onclick="selectTable('scripts')">scripts</button>
           <button class="btn-table" onclick="selectTable('mini_events')">mini_events</button>
           <button id="musicToggleBtn" class="music-toggle" onclick="toggleMusic()">+ _music 붙이기</button>
         </div>
@@ -109,28 +109,55 @@
 </div>
 
 <script>
-  // --- Step 1: 텍스트 에디터 & 키워드 감지 로직 ---
+  // 기본 예시 스토리 샘플 데이터 설정
+  const defaultSample = `장소
+수영장
+
+일러
+132
+
+토리
+으앙, 진짜 못 참겠어!
+
+토리
+지쳤어~ 허리 아파! 체육복도 축축해서 기분 나쁘고, 햇빛이 따가워서 머리도 아파와! 이제 더는 하기 싫어~!
+
+히나타
+지치는 거 빠르네, 히메 군. 파이팅, 파이팅~♪
+
+히나타
+안즈 씨가 음료수 사러 갔으니까, 오면 그때 같이 쉬자. 노력, 우정, 승리~♪`;
+
   const rawTextEl = document.getElementById('rawText');
   const keywordListEl = document.getElementById('keywordList');
+  rawTextEl.value = defaultSample;
 
-  // 대괄호 [ ... ] 가 들어간 패턴 감지
-  const KEYWORD_REGEX = /\[.*?\]/g;
+  // 메타 키워드 지정 (단독으로 존재하는 제어어 목록)
+  const META_KEYWORDS = ['장소', '일러', 'CG', '이미지', '배경', 'BGM', '사운드'];
 
   rawTextEl.addEventListener('input', updateKeywordSidebar);
 
+  // --- Step 1: 지문 및 메타 키워드 실시간 감지 ---
   function updateKeywordSidebar() {
     const lines = rawTextEl.value.split('\n');
     keywordListEl.innerHTML = '';
 
     lines.forEach((line, index) => {
-      if (KEYWORD_REGEX.test(line)) {
+      const trimmed = line.trim();
+      // 메타 키워드와 단독 일치하거나 [ ] 대괄호 지문인 경우 감지
+      const isMetaKeyword = META_KEYWORDS.includes(trimmed);
+      const isBracketKeyword = /^\[.*?\]$/.test(trimmed);
+
+      if (isMetaKeyword || isBracketKeyword) {
+        const nextLineVal = (lines[index + 1] || '').trim();
+        const displayLabel = isMetaKeyword && nextLineVal ? `${trimmed}: ${nextLineVal}` : trimmed;
+
         const item = document.createElement('div');
         item.className = 'keyword-item';
-        item.innerText = `L${index + 1}: ${line.trim()}`;
+        item.innerText = `L${index + 1}: ${displayLabel}`;
         item.onclick = () => jumpToLine(index);
         keywordListEl.appendChild(item);
       }
-      KEYWORD_REGEX.lastIndex = 0;
     });
   }
 
@@ -144,12 +171,13 @@
     rawTextEl.setSelectionRange(pos, pos + lines[lineIndex].length);
   }
 
-  // --- Step 2: 파이썬 로직 이식 & AG Grid 연결 ---
+  // --- Step 2: 파서 엔진 & AG Grid 연결 ---
   let gridApi;
   const gridOptions = {
     columnDefs: [
-      { field: "name", headerName: "이름 (Name)", editable: true, width: 200 },
-      { field: "dialogue", headerName: "대사 (Dialogue)", editable: true, flex: 1 }
+      { field: "type", headerName: "구분", editable: true, width: 100 },
+      { field: "name", headerName: "이름 / 메타 키", editable: true, width: 180 },
+      { field: "dialogue", headerName: "대사 / 메타 값", editable: true, flex: 1 }
     ],
     defaultColDef: { resizable: true, sortable: true },
     rowData: []
@@ -158,27 +186,52 @@
   document.addEventListener('DOMContentLoaded', () => {
     const gridDiv = document.querySelector('#myGrid');
     gridApi = agGrid.createGrid(gridDiv, gridOptions);
-    updateKeywordSidebar(); // 초기 키워드 검사
+    updateKeywordSidebar();
   });
 
-  // 파이썬 convert_text_to_csv 로직 동일 구현
+  // 줄글 형태 스토리 파서
   function parseTextToGrid() {
     const lines = rawTextEl.value.split('\n').map(l => l.trim());
-    const dataPairs = [];
+    const rowData = [];
 
-    // 파이썬의 range(0, len(lines), 3) 과 동일한 흐름
-    for (let i = 0; i < lines.length; i += 3) {
-      if (i + 1 < lines.length) {
-        const name = lines[i];
-        const dialogue = lines[i + 1];
-        // 빈 줄이 아닌 의미 있는 데이터일 때 추가
-        if (name || dialogue) {
-          dataPairs.push({ name: name, dialogue: dialogue });
-        }
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+
+      // 1. 빈 줄 스킵
+      if (!line) {
+        i++;
+        continue;
       }
+
+      // 2. 단독 메타 키워드 처리 ('장소', '일러' 등 바로 다음 줄이 데이터인 경우)
+      if (META_KEYWORDS.includes(line)) {
+        const metaKey = line;
+        const metaValue = (i + 1 < lines.length) ? lines[i + 1] : '';
+        rowData.push({ type: "META", name: metaKey, dialogue: metaValue });
+        i += 2; // 키와 값을 읽었으므로 2줄 이동
+        continue;
+      }
+
+      // 3. 일반 대사 처리 (첫 줄: 캐릭터 이름, 둘째 줄: 대사)
+      const name = line;
+      let dialogue = "";
+
+      if (i + 1 < lines.length && lines[i + 1] !== "") {
+        dialogue = lines[i + 1];
+        i += 2;
+      } else {
+        // 단독 지문/나레이션 문장일 경우
+        dialogue = name;
+        rowData.push({ type: "NARRATION", name: "", dialogue: dialogue });
+        i++;
+        continue;
+      }
+
+      rowData.push({ type: "DIALOGUE", name: name, dialogue: dialogue });
     }
 
-    gridApi.setGridOption('rowData', dataPairs);
+    gridApi.setGridOption('rowData', rowData);
   }
 
   // --- Step 3: 테이블 선택 & SQL 생성기 ---
@@ -190,12 +243,9 @@
 
   function selectTable(tableName) {
     selectedBaseTable = tableName;
-    
-    // 버튼 active 스타일 업데이트
     document.querySelectorAll('.btn-table').forEach(btn => {
       btn.classList.toggle('active', btn.innerText === tableName);
     });
-
     updateTargetInput();
   }
 
@@ -221,13 +271,13 @@
     const tableName = targetInput.value.trim() || 'scripts';
 
     let sql = "BEGIN TRANSACTION;\n";
-    sql += `INSERT INTO ${tableName} (speaker, dialogue) VALUES\n`;
+    sql += `INSERT INTO ${tableName} (type, speaker, dialogue) VALUES\n`;
 
     const values = rowData.map(row => {
-      // SQL Single Quote (') 이스케이프 처리
+      const type = (row.type || 'DIALOGUE').replace(/'/g, "''");
       const speaker = (row.name || '').replace(/'/g, "''");
       const dialogue = (row.dialogue || '').replace(/'/g, "''");
-      return `  ('${speaker}', '${dialogue}')`;
+      return `  ('${type}', '${speaker}', '${dialogue}')`;
     });
 
     sql += values.join(",\n") + ";\n";
@@ -244,7 +294,7 @@
     }
     sqlText.select();
     document.execCommand('copy');
-    alert('SQL이 클립보드에 복사되었습니다! Turso 콘솔에 붙여넣으세요.');
+    alert('SQL이 클립보드에 복사되었습니다!');
   }
 </script>
 </body>
