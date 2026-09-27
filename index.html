@@ -9,7 +9,7 @@
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 24px; background: #f0f2f5; color: #1c1e21; }
     .container { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
     
-    /* 탭 헤더 */
+    /* 탭 네비게이션 헤더 */
     .tab-header { display: flex; gap: 8px; border-bottom: 2px solid #cbd5e0; margin-bottom: 8px; }
     .tab-btn { padding: 12px 24px; font-size: 1rem; font-weight: bold; color: #4a5568; background: #e2e8f0; border: none; border-radius: 8px 8px 0 0; cursor: pointer; transition: all 0.2s; }
     .tab-btn:hover { background: #cbd5e0; }
@@ -32,7 +32,7 @@
     .keyword-item { padding: 8px; margin-bottom: 6px; background: #ebf8ff; border-left: 4px solid #3182ce; border-radius: 4px; cursor: pointer; font-size: 0.85rem; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .keyword-item:hover { background: #bee3f8; }
 
-    /* 2단계 출력 영역 */
+    /* 2단계 CSV/TSV 프리뷰 */
     .csv-output { width: 100%; height: 220px; font-family: "Consolas", monospace; padding: 12px; background: #f8fafc; border: 1px solid #cbd5e0; border-radius: 8px; font-size: 0.9rem; resize: none; }
 
     /* 3단계 DB 테이블 선택 레이아웃 */
@@ -55,6 +55,8 @@
     .action-btn:hover { background: #2b6cb0; }
     .copy-btn { background: #38a169; }
     .copy-btn:hover { background: #2f855a; }
+    .download-btn { background: #d69e2e; }
+    .download-btn:hover { background: #b7791f; }
   </style>
 </head>
 <body>
@@ -76,19 +78,20 @@
       <div class="editor-layout">
         <textarea id="rawText" placeholder="스토리 텍스트를 붙여넣으세요..."></textarea>
         <div class="keyword-sidebar">
-          <div class="keyword-title">📌 키워드 감지 줄 ([장소], [일러] 등)</div>
+          <div class="keyword-title">📌 키워드 감지 줄 (장소, 일러, [ ] 등)</div>
           <div id="keywordList"></div>
         </div>
       </div>
-      <button class="action-btn" onclick="parseTextToCSV()">CSV 형태 변환 ↓</button>
+      <button class="action-btn" onclick="parseTextToTwoColumns()">스프레드시트용 가공 (A열/B열 분리) ↓</button>
     </div>
 
-    <!-- 2. CSV 추출 (스프레드시트 복사용) -->
+    <!-- 2. CSV/TSV 추출 및 다운로드 -->
     <div class="card">
-      <h2>2. CSV / 스프레드시트 붙여넣기용 데이터</h2>
-      <textarea id="csvResult" class="csv-output" readonly placeholder="변환된 CSV 데이터가 여기에 표시됩니다..."></textarea>
+      <h2>2. 스프레드시트 붙여넣기용 데이터 (A열: 이름/키, B열: 대사/값)</h2>
+      <textarea id="tsvResult" class="csv-output" readonly placeholder="가공된 데이터가 여기에 표시됩니다 (A열 [TAB] B열 형태)..."></textarea>
       <div style="display: flex; gap: 8px;">
-        <button class="action-btn copy-btn" onclick="copyResult('csvResult')">클립보드 복사 (스프레드시트에 붙여넣기)</button>
+        <button class="action-btn copy-btn" onclick="copyTSV()">스프레드시트에 바로 붙여넣기 복사</button>
+        <button class="action-btn download-btn" onclick="downloadCSV()">CSV 파일로 다운로드</button>
       </div>
     </div>
 
@@ -159,7 +162,7 @@
   const rawTextEl = document.getElementById('rawText');
   const keywordListEl = document.getElementById('keywordList');
 
-  // 감지할 주요 키워드 규칙 (장소, 일러, [ ], 등)
+  // 감지할 주요 키워드 규칙 (장소, 일러, CG, [ ], 등)
   const KEYWORD_REGEX = /(장소|일러|CG|이미지|배경|BGM|\[.*?\])/;
 
   rawTextEl.addEventListener('input', updateKeywordSidebar);
@@ -180,7 +183,6 @@
     });
   }
 
-  // 커서 이동 및 높이 계산 스크롤
   function jumpToLine(lineIndex) {
     const lines = rawTextEl.value.split('\n');
     let pos = 0;
@@ -196,29 +198,84 @@
     rawTextEl.scrollTop = lineIndex * lineHeight - 50;
   }
 
-  // --- Step 2: CSV 변환 (기존 파이썬 알고리즘 동일 이식) ---
-  function parseTextToCSV() {
-    const lines = rawTextEl.value.split('\n').map(l => l.trim());
-    const dataPairs = [];
+  // 데이터 저장용 변수
+  let parsedRows = []; // [{ colA: '장소', colB: '수영장' }, ...]
 
-    // 파이썬 convert_text_to_csv와 완전히 동일한 3줄 주기(이름, 대사, 빈줄) 읽기
-    for (let i = 0; i < lines.length; i += 3) {
-      if (i + 1 < lines.length) {
-        const name = lines[i];
-        const dialogue = lines[i + 1];
-        if (name || dialogue) {
-          // 큰따옴표 이스케이프 및 묶음 처리
-          const escapedName = `"${name.replace(/"/g, '""')}"`;
-          const escapedDialogue = `"${dialogue.replace(/"/g, '""')}"`;
-          dataPairs.push(`${escapedName},${escapedDialogue}`);
-        }
+  // --- Step 2: A열 / B열 분리 파싱 엔진 ---
+  function parseTextToTwoColumns() {
+    const lines = rawTextEl.value.split('\n').map(l => l.trim());
+    parsedRows = [];
+
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+
+      // 빈 줄 스킵
+      if (!line) {
+        i++;
+        continue;
+      }
+
+      // 파이썬 로직과 동일하게 3줄 주기(1행: A열 / 2행: B열 / 3행: 빈줄)로 짝지어 읽기
+      if (i + 1 < lines.length && lines[i + 1] !== "") {
+        parsedRows.push({
+          colA: line,
+          colB: lines[i + 1]
+        });
+        i += 2; // 2줄 읽었으므로
+        if (i < lines.length && lines[i] === "") i++; // 3번째 빈 줄 지나치기
+      } else {
+        // B열에 올 데이터가 없거나 단독 문장인 경우
+        parsedRows.push({
+          colA: "",
+          colB: line
+        });
+        i++;
       }
     }
 
-    document.getElementById('csvResult').value = dataPairs.join('\n');
+    // 화면용 출력 (구글 스프레드시트 붙여넣기에 최적화된 TAB 구분 텍스트)
+    const tsvDisplay = parsedRows.map(r => `${r.colA}\t${r.colB}`).join('\n');
+    document.getElementById('tsvResult').value = tsvDisplay;
   }
 
-  // --- Step 3: 스프레드시트 데이터 ➔ SQL 변환 ---
+  // 스프레드시트 맞춤 클립보드 복사 (탭 구분자 형태)
+  function copyTSV() {
+    const tsvText = document.getElementById('tsvResult').value;
+    if (!tsvText) {
+      alert("가공된 데이터가 없습니다. 먼저 버튼을 눌러 데이터를 가공해 주세요.");
+      return;
+    }
+    navigator.clipboard.writeText(tsvText).then(() => {
+      alert("클립보드에 복사되었습니다! 구글 스프레드시트에 바로 Ctrl+V 로 붙여넣으세요.");
+    });
+  }
+
+  // CSV 파일 내보내기 (다운로드)
+  function downloadCSV() {
+    if (parsedRows.length === 0) {
+      alert("다운로드할 데이터가 없습니다.");
+      return;
+    }
+
+    // UTF-8 BOM 추가 (엑셀 한글 깨짐 방지)
+    let csvContent = "\uFEFF";
+    parsedRows.forEach(row => {
+      const escA = `"${(row.colA || '').replace(/"/g, '""')}"`;
+      const escB = `"${(row.colB || '').replace(/"/g, '""')}"`;
+      csvContent += `${escA},${escB}\n`;
+    });
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'story_parsed.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // --- Step 3: 외부 스프레드시트 복붙 ➔ SQL 변환 ---
   let selectedBaseTable = 'scripts';
   let isMusicAttached = false;
 
@@ -256,8 +313,8 @@
 
     lines.forEach(line => {
       if (!line.trim()) return;
-      // 스프레드시트 복사 데이터는 Tab(\t) 문자로 구분됨
-      const cols = line.split('\t').map(c => c.trim().replace(/^"(.*)"$/, '$1')); // 앞뒤 따옴표 제거
+      // 스프레드시트에서 복사한 데이터는 Tab(\t) 문자로 구분됨
+      const cols = line.split('\t').map(c => c.trim().replace(/^"(.*)"$/, '$1'));
       
       const formattedCols = cols.map(col => `'${col.replace(/'/g, "''")}'`);
       values.push(`  (${formattedCols.join(', ')})`);
@@ -276,7 +333,7 @@
     document.getElementById('sqlResult').value = sql;
   }
 
-  // 공통 복사 함수
+  // 공통 결과 복사 함수
   function copyResult(elementId) {
     const el = document.getElementById(elementId);
     if (!el.value) {
