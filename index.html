@@ -3,23 +3,28 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>스토리 백업 & Turso DB 변환 파이프라인</title>
-  
-  <!-- AG Grid (웹 스프레드시트 라이브러리) -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community/styles/ag-grid.css">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community/styles/ag-theme-alpine.css">
-  <script src="https://cdn.jsdelivr.net/npm/ag-grid-community/dist/ag-grid-community.min.js"></script>
-
+  <title>스토리 백업 & DB 변환 파이프라인</title>
   <style>
     * { box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 24px; background: #f0f2f5; color: #1c1e21; }
-    .container { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+    .container { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+    
+    /* 탭 헤더 */
+    .tab-header { display: flex; gap: 8px; border-bottom: 2px solid #cbd5e0; margin-bottom: 8px; }
+    .tab-btn { padding: 12px 24px; font-size: 1rem; font-weight: bold; color: #4a5568; background: #e2e8f0; border: none; border-radius: 8px 8px 0 0; cursor: pointer; transition: all 0.2s; }
+    .tab-btn:hover { background: #cbd5e0; }
+    .tab-btn.active { background: #ffffff; color: #3182ce; border-top: 3px solid #3182ce; margin-bottom: -2px; }
+
+    /* 탭 컨텐츠 */
+    .tab-content { display: none; }
+    .tab-content.active { display: flex; flex-direction: column; gap: 20px; }
+
     .card { background: #ffffff; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
     h2 { margin-top: 0; font-size: 1.15rem; color: #1a202c; border-bottom: 2px solid #edf2f7; padding-bottom: 10px; }
     
     /* 1단계 텍스트 에디터 레이아웃 */
-    .editor-layout { display: flex; gap: 16px; height: 350px; }
-    textarea { flex: 2; height: 100%; padding: 12px; font-family: "Consolas", "Courier New", monospace; font-size: 0.95rem; border: 1px solid #cbd5e0; border-radius: 8px; resize: none; line-height: 1.5; }
+    .editor-layout { display: flex; gap: 16px; height: 380px; }
+    textarea { flex: 2; height: 100%; padding: 12px; font-family: "Consolas", "Courier New", monospace; font-size: 0.95rem; border: 1px solid #cbd5e0; border-radius: 8px; resize: none; line-height: 1.5; white-space: pre; }
     textarea:focus { outline: none; border-color: #3182ce; box-shadow: 0 0 0 3px rgba(49,130,206,0.2); }
     
     .keyword-sidebar { flex: 1; border: 1px solid #cbd5e0; border-radius: 8px; overflow-y: auto; padding: 10px; background: #f7fafc; }
@@ -27,8 +32,8 @@
     .keyword-item { padding: 8px; margin-bottom: 6px; background: #ebf8ff; border-left: 4px solid #3182ce; border-radius: 4px; cursor: pointer; font-size: 0.85rem; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .keyword-item:hover { background: #bee3f8; }
 
-    /* 2단계 그리드 레이아웃 */
-    #myGrid { height: 380px; width: 100%; }
+    /* 2단계 출력 영역 */
+    .csv-output { width: 100%; height: 220px; font-family: "Consolas", monospace; padding: 12px; background: #f8fafc; border: 1px solid #cbd5e0; border-radius: 8px; font-size: 0.9rem; resize: none; }
 
     /* 3단계 DB 테이블 선택 레이아웃 */
     .table-selection-zone { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
@@ -42,199 +47,178 @@
 
     .input-table-name { width: 300px; padding: 8px 12px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 0.9rem; font-weight: bold; color: #2b6cb0; }
 
-    /* SQL 영역 */
-    .sql-output { width: 100%; height: 180px; font-family: "Consolas", monospace; padding: 12px; background: #1a202c; color: #63b3ed; border-radius: 8px; font-size: 0.9rem; border: none; }
+    .sheet-input { width: 100%; height: 200px; font-family: "Consolas", monospace; padding: 12px; border: 1px solid #cbd5e0; border-radius: 8px; font-size: 0.9rem; resize: none; }
+    .sql-output { width: 100%; height: 200px; font-family: "Consolas", monospace; padding: 12px; background: #1a202c; color: #63b3ed; border-radius: 8px; font-size: 0.9rem; border: none; resize: none; }
 
     /* 공통 버튼 */
     .action-btn { background: #3182ce; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 0.95rem; margin-top: 12px; }
     .action-btn:hover { background: #2b6cb0; }
+    .copy-btn { background: #38a169; }
+    .copy-btn:hover { background: #2f855a; }
   </style>
 </head>
 <body>
 
 <div class="container">
   
-  <!-- Step 1: 텍스트 수정 및 키워드 모아보기 -->
-  <div class="card">
-    <h2>1. 스토리 텍스트 편집 (장소, 일러, CG 등 감지)</h2>
-    <div class="editor-layout">
-      <textarea id="rawText" placeholder="스토리 텍스트를 붙여넣으세요..."></textarea>
-      <div class="keyword-sidebar">
-        <div class="keyword-title">📌 감지된 지문/메타 키워드</div>
-        <div id="keywordList"></div>
+  <!-- 탭 네비게이션 -->
+  <div class="tab-header">
+    <button class="tab-btn active" onclick="switchTab('tab1')">1-2. 텍스트 편집 & CSV 변환</button>
+    <button class="tab-btn" onclick="switchTab('tab2')">3. 스프레드시트 ➔ SQL 변환</button>
+  </div>
+
+  <!-- TAB 1: 텍스트 편집 & CSV 변환 -->
+  <div id="tab1" class="tab-content active">
+    
+    <!-- 1. 텍스트 편집 -->
+    <div class="card">
+      <h2>1. 스토리 텍스트 편집 & 키워드 모아보기</h2>
+      <div class="editor-layout">
+        <textarea id="rawText" placeholder="스토리 텍스트를 붙여넣으세요..."></textarea>
+        <div class="keyword-sidebar">
+          <div class="keyword-title">📌 키워드 감지 줄 ([장소], [일러] 등)</div>
+          <div id="keywordList"></div>
+        </div>
+      </div>
+      <button class="action-btn" onclick="parseTextToCSV()">CSV 형태 변환 ↓</button>
+    </div>
+
+    <!-- 2. CSV 추출 (스프레드시트 복사용) -->
+    <div class="card">
+      <h2>2. CSV / 스프레드시트 붙여넣기용 데이터</h2>
+      <textarea id="csvResult" class="csv-output" readonly placeholder="변환된 CSV 데이터가 여기에 표시됩니다..."></textarea>
+      <div style="display: flex; gap: 8px;">
+        <button class="action-btn copy-btn" onclick="copyResult('csvResult')">클립보드 복사 (스프레드시트에 붙여넣기)</button>
       </div>
     </div>
-    <button class="action-btn" onclick="parseTextToGrid()">Step 2. 엑셀 형태 그리드로 변환 ↓</button>
+
   </div>
 
-  <!-- Step 2: 웹 스프레드시트 (AG Grid) -->
-  <div class="card">
-    <h2>2. 작업용 스프레드시트 (검수 및 직접 수정)</h2>
-    <div id="myGrid" class="ag-theme-alpine"></div>
-  </div>
-
-  <!-- Step 3: DB 테이블 선택 및 SQLite SQL 생성 -->
-  <div class="card">
-    <h2>3. Turso / SQLite Batch SQL 변환</h2>
+  <!-- TAB 2: 외부 스프레드시트 복붙 -> SQL 변환 -->
+  <div id="tab2" class="tab-content">
     
-    <div class="table-selection-zone">
-      <div>
-        <strong>기본 테이블 선택:</strong>
-        <div class="btn-group" style="margin-top: 6px;">
-          <button class="btn-table" onclick="selectTable('campaigns')">campaigns</button>
-          <button class="btn-table" onclick="selectTable('campaign_units')">campaign_units</button>
-          <button class="btn-table" onclick="selectTable('episodes')">episodes</button>
-          <button class="btn-table" onclick="selectTable('episode_characters')">episode_characters</button>
-          <button class="btn-table" onclick="selectTable('cgs')">cgs</button>
-          <button class="btn-table active" onclick="selectTable('scripts')">scripts</button>
-          <button class="btn-table" onclick="selectTable('mini_events')">mini_events</button>
-          <button id="musicToggleBtn" class="music-toggle" onclick="toggleMusic()">+ _music 붙이기</button>
+    <div class="card">
+      <h2>3. 작업용 스프레드시트 데이터 ➔ Turso / SQLite SQL 변환</h2>
+      
+      <!-- 테이블 선택 노출 -->
+      <div class="table-selection-zone">
+        <div>
+          <strong>기본 테이블 선택:</strong>
+          <div class="btn-group" style="margin-top: 6px;">
+            <button class="btn-table" onclick="selectTable('campaigns')">campaigns</button>
+            <button class="btn-table" onclick="selectTable('campaign_units')">campaign_units</button>
+            <button class="btn-table" onclick="selectTable('episodes')">episodes</button>
+            <button class="btn-table" onclick="selectTable('episode_characters')">episode_characters</button>
+            <button class="btn-table" onclick="selectTable('cgs')">cgs</button>
+            <button class="btn-table active" onclick="selectTable('scripts')">scripts</button>
+            <button class="btn-table" onclick="selectTable('mini_events')">mini_events</button>
+            <button id="musicToggleBtn" class="music-toggle" onclick="toggleMusic()">+ _music 붙이기</button>
+          </div>
+        </div>
+
+        <div style="margin-top: 8px;">
+          <strong>적용할 Target Table 이름:</strong>
+          <input type="text" id="targetTableName" class="input-table-name" value="scripts" placeholder="테이블명 입력...">
         </div>
       </div>
 
-      <div style="margin-top: 8px;">
-        <strong>적용할 Target Table 이름:</strong>
-        <input type="text" id="targetTableName" class="input-table-name" value="scripts" placeholder="테이블명 입력...">
+      <div style="margin-bottom: 12px;">
+        <strong>스프레드시트에서 복사한 데이터 붙여넣기:</strong>
+        <textarea id="sheetText" class="sheet-input" style="margin-top: 6px;" placeholder="구글 스프레드시트에서 선택한 영역을 복사(Ctrl+C) 후 여기에 붙여넣으세요(Ctrl+V)..."></textarea>
       </div>
+
+      <button class="action-btn" onclick="generateSQLFromSheet()">Batch SQL 생성하기</button>
+
+      <div style="margin-top: 16px;">
+        <textarea id="sqlResult" class="sql-output" readonly placeholder="여기에 생성된 INSERT SQL문이 표시됩니다..."></textarea>
+        <button class="action-btn copy-btn" style="margin-top: 8px;" onclick="copyResult('sqlResult')">SQL 클립보드 복사</button>
+      </div>
+
     </div>
 
-    <button class="action-btn" onclick="generateTursoSQL()">Batch SQL 생성하기</button>
-
-    <div style="margin-top: 16px;">
-      <textarea id="sqlResult" class="sql-output" readonly placeholder="여기에 생성된 INSERT SQL문이 표시됩니다..."></textarea>
-      <button class="action-btn" style="background: #38a169;" onclick="copySQL()">SQL 클립보드 복사</button>
-    </div>
   </div>
 
 </div>
 
 <script>
-  // 기본 예시 스토리 샘플 데이터 설정
-  const defaultSample = `장소
-수영장
+  // --- 탭 전환 로직 ---
+  function switchTab(tabId) {
+    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+    
+    if (tabId === 'tab1') {
+      document.querySelectorAll('.tab-btn')[0].classList.add('active');
+      document.getElementById('tab1').classList.add('active');
+    } else {
+      document.querySelectorAll('.tab-btn')[1].classList.add('active');
+      document.getElementById('tab2').classList.add('active');
+    }
+  }
 
-일러
-132
-
-토리
-으앙, 진짜 못 참겠어!
-
-토리
-지쳤어~ 허리 아파! 체육복도 축축해서 기분 나쁘고, 햇빛이 따가워서 머리도 아파와! 이제 더는 하기 싫어~!
-
-히나타
-지치는 거 빠르네, 히메 군. 파이팅, 파이팅~♪
-
-히나타
-안즈 씨가 음료수 사러 갔으니까, 오면 그때 같이 쉬자. 노력, 우정, 승리~♪`;
-
+  // --- Step 1: 텍스트 에디터 & 키워드 바로가기 이동 ---
   const rawTextEl = document.getElementById('rawText');
   const keywordListEl = document.getElementById('keywordList');
-  rawTextEl.value = defaultSample;
 
-  // 메타 키워드 지정 (단독으로 존재하는 제어어 목록)
-  const META_KEYWORDS = ['장소', '일러', 'CG', '이미지', '배경', 'BGM', '사운드'];
+  // 감지할 주요 키워드 규칙 (장소, 일러, [ ], 등)
+  const KEYWORD_REGEX = /(장소|일러|CG|이미지|배경|BGM|\[.*?\])/;
 
   rawTextEl.addEventListener('input', updateKeywordSidebar);
 
-  // --- Step 1: 지문 및 메타 키워드 실시간 감지 ---
   function updateKeywordSidebar() {
     const lines = rawTextEl.value.split('\n');
     keywordListEl.innerHTML = '';
 
     lines.forEach((line, index) => {
       const trimmed = line.trim();
-      // 메타 키워드와 단독 일치하거나 [ ] 대괄호 지문인 경우 감지
-      const isMetaKeyword = META_KEYWORDS.includes(trimmed);
-      const isBracketKeyword = /^\[.*?\]$/.test(trimmed);
-
-      if (isMetaKeyword || isBracketKeyword) {
-        const nextLineVal = (lines[index + 1] || '').trim();
-        const displayLabel = isMetaKeyword && nextLineVal ? `${trimmed}: ${nextLineVal}` : trimmed;
-
+      if (trimmed && KEYWORD_REGEX.test(trimmed)) {
         const item = document.createElement('div');
         item.className = 'keyword-item';
-        item.innerText = `L${index + 1}: ${displayLabel}`;
+        item.innerText = `L${index + 1}: ${trimmed}`;
         item.onclick = () => jumpToLine(index);
         keywordListEl.appendChild(item);
       }
     });
   }
 
+  // 커서 이동 및 높이 계산 스크롤
   function jumpToLine(lineIndex) {
     const lines = rawTextEl.value.split('\n');
     let pos = 0;
     for (let i = 0; i < lineIndex; i++) {
-      pos += lines[i].length + 1;
+      pos += lines[i].length + 1; // 줄바꿈(\n) 1글자 포함
     }
+    
     rawTextEl.focus();
     rawTextEl.setSelectionRange(pos, pos + lines[lineIndex].length);
+
+    // 스크롤 높이 자동 맞춤
+    const lineHeight = parseFloat(window.getComputedStyle(rawTextEl).lineHeight) || 21;
+    rawTextEl.scrollTop = lineIndex * lineHeight - 50;
   }
 
-  // --- Step 2: 파서 엔진 & AG Grid 연결 ---
-  let gridApi;
-  const gridOptions = {
-    columnDefs: [
-      { field: "type", headerName: "구분", editable: true, width: 100 },
-      { field: "name", headerName: "이름 / 메타 키", editable: true, width: 180 },
-      { field: "dialogue", headerName: "대사 / 메타 값", editable: true, flex: 1 }
-    ],
-    defaultColDef: { resizable: true, sortable: true },
-    rowData: []
-  };
-
-  document.addEventListener('DOMContentLoaded', () => {
-    const gridDiv = document.querySelector('#myGrid');
-    gridApi = agGrid.createGrid(gridDiv, gridOptions);
-    updateKeywordSidebar();
-  });
-
-  // 줄글 형태 스토리 파서
-  function parseTextToGrid() {
+  // --- Step 2: CSV 변환 (기존 파이썬 알고리즘 동일 이식) ---
+  function parseTextToCSV() {
     const lines = rawTextEl.value.split('\n').map(l => l.trim());
-    const rowData = [];
+    const dataPairs = [];
 
-    let i = 0;
-    while (i < lines.length) {
-      const line = lines[i];
-
-      // 1. 빈 줄 스킵
-      if (!line) {
-        i++;
-        continue;
+    // 파이썬 convert_text_to_csv와 완전히 동일한 3줄 주기(이름, 대사, 빈줄) 읽기
+    for (let i = 0; i < lines.length; i += 3) {
+      if (i + 1 < lines.length) {
+        const name = lines[i];
+        const dialogue = lines[i + 1];
+        if (name || dialogue) {
+          // 큰따옴표 이스케이프 및 묶음 처리
+          const escapedName = `"${name.replace(/"/g, '""')}"`;
+          const escapedDialogue = `"${dialogue.replace(/"/g, '""')}"`;
+          dataPairs.push(`${escapedName},${escapedDialogue}`);
+        }
       }
-
-      // 2. 단독 메타 키워드 처리 ('장소', '일러' 등 바로 다음 줄이 데이터인 경우)
-      if (META_KEYWORDS.includes(line)) {
-        const metaKey = line;
-        const metaValue = (i + 1 < lines.length) ? lines[i + 1] : '';
-        rowData.push({ type: "META", name: metaKey, dialogue: metaValue });
-        i += 2; // 키와 값을 읽었으므로 2줄 이동
-        continue;
-      }
-
-      // 3. 일반 대사 처리 (첫 줄: 캐릭터 이름, 둘째 줄: 대사)
-      const name = line;
-      let dialogue = "";
-
-      if (i + 1 < lines.length && lines[i + 1] !== "") {
-        dialogue = lines[i + 1];
-        i += 2;
-      } else {
-        // 단독 지문/나레이션 문장일 경우
-        dialogue = name;
-        rowData.push({ type: "NARRATION", name: "", dialogue: dialogue });
-        i++;
-        continue;
-      }
-
-      rowData.push({ type: "DIALOGUE", name: name, dialogue: dialogue });
     }
 
-    gridApi.setGridOption('rowData', rowData);
+    document.getElementById('csvResult').value = dataPairs.join('\n');
   }
 
-  // --- Step 3: 테이블 선택 & SQL 생성기 ---
+  // --- Step 3: 스프레드시트 데이터 ➔ SQL 변환 ---
   let selectedBaseTable = 'scripts';
   let isMusicAttached = false;
 
@@ -259,42 +243,49 @@
     targetInput.value = selectedBaseTable + (isMusicAttached ? '_music' : '');
   }
 
-  function generateTursoSQL() {
-    const rowData = [];
-    gridApi.forEachNode(node => rowData.push(node.data));
-
-    if (rowData.length === 0) {
-      alert("변환할 그리드 데이터가 없습니다. 먼저 Step 2 변환을 진행하세요.");
+  function generateSQLFromSheet() {
+    const sheetText = document.getElementById('sheetText').value.trim();
+    if (!sheetText) {
+      alert("스프레드시트에서 복사한 데이터를 붙여넣어 주세요.");
       return;
     }
 
     const tableName = targetInput.value.trim() || 'scripts';
+    const lines = sheetText.split('\n');
+    const values = [];
 
-    let sql = "BEGIN TRANSACTION;\n";
-    sql += `INSERT INTO ${tableName} (type, speaker, dialogue) VALUES\n`;
-
-    const values = rowData.map(row => {
-      const type = (row.type || 'DIALOGUE').replace(/'/g, "''");
-      const speaker = (row.name || '').replace(/'/g, "''");
-      const dialogue = (row.dialogue || '').replace(/'/g, "''");
-      return `  ('${type}', '${speaker}', '${dialogue}')`;
+    lines.forEach(line => {
+      if (!line.trim()) return;
+      // 스프레드시트 복사 데이터는 Tab(\t) 문자로 구분됨
+      const cols = line.split('\t').map(c => c.trim().replace(/^"(.*)"$/, '$1')); // 앞뒤 따옴표 제거
+      
+      const formattedCols = cols.map(col => `'${col.replace(/'/g, "''")}'`);
+      values.push(`  (${formattedCols.join(', ')})`);
     });
 
+    if (values.length === 0) {
+      alert("변환할 데이터가 없습니다.");
+      return;
+    }
+
+    let sql = "BEGIN TRANSACTION;\n";
+    sql += `INSERT INTO ${tableName} VALUES\n`;
     sql += values.join(",\n") + ";\n";
     sql += "COMMIT;";
 
     document.getElementById('sqlResult').value = sql;
   }
 
-  function copySQL() {
-    const sqlText = document.getElementById('sqlResult');
-    if (!sqlText.value) {
-      alert("복사할 SQL이 없습니다. 먼저 생성 버튼을 누르세요.");
+  // 공통 복사 함수
+  function copyResult(elementId) {
+    const el = document.getElementById(elementId);
+    if (!el.value) {
+      alert("복사할 내용이 없습니다.");
       return;
     }
-    sqlText.select();
+    el.select();
     document.execCommand('copy');
-    alert('SQL이 클립보드에 복사되었습니다!');
+    alert('클립보드에 복사되었습니다!');
   }
 </script>
 </body>
