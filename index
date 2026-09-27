@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>스토리 백업 & Turso DB 변환 파이프라인</title>
+  
+  <!-- AG Grid (웹 스프레드시트 라이브러리) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community/styles/ag-grid.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community/styles/ag-theme-alpine.css">
+  <script src="https://cdn.jsdelivr.net/npm/ag-grid-community/dist/ag-grid-community.min.js"></script>
+
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 24px; background: #f0f2f5; color: #1c1e21; }
+    .container { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+    .card { background: #ffffff; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+    h2 { margin-top: 0; font-size: 1.15rem; color: #1a202c; border-bottom: 2px solid #edf2f7; padding-bottom: 10px; }
+    
+    /* 1단계 텍스트 에디터 레이아웃 */
+    .editor-layout { display: flex; gap: 16px; height: 320px; }
+    textarea { flex: 2; height: 100%; padding: 12px; font-family: "Consolas", "Courier New", monospace; font-size: 0.95rem; border: 1px solid #cbd5e0; border-radius: 8px; resize: none; line-height: 1.5; }
+    textarea:focus { outline: none; border-color: #3182ce; box-shadow: 0 0 0 3px rgba(49,130,206,0.2); }
+    
+    .keyword-sidebar { flex: 1; border: 1px solid #cbd5e0; border-radius: 8px; overflow-y: auto; padding: 10px; background: #f7fafc; }
+    .keyword-title { font-size: 0.85rem; font-weight: bold; color: #718096; margin-bottom: 8px; }
+    .keyword-item { padding: 8px; margin-bottom: 6px; background: #ebf8ff; border-left: 4px solid #3182ce; border-radius: 4px; cursor: pointer; font-size: 0.85rem; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .keyword-item:hover { background: #bee3f8; }
+
+    /* 2단계 그리드 레이아웃 */
+    #myGrid { height: 350px; width: 100%; }
+
+    /* 3단계 DB 테이블 선택 레이아웃 */
+    .table-selection-zone { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+    .btn-group { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .btn-table { background: #edf2f7; color: #2d3748; border: 1px solid #cbd5e0; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.88rem; font-weight: 500; transition: all 0.2s; }
+    .btn-table:hover { background: #e2e8f0; }
+    .btn-table.active { background: #3182ce; color: white; border-color: #3182ce; }
+    
+    .music-toggle { background: #feebc8; color: #742a2a; border: 1px solid #fbd38d; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.88rem; font-weight: bold; }
+    .music-toggle.active { background: #e53e3e; color: white; border-color: #e53e3e; }
+
+    .input-table-name { width: 300px; padding: 8px 12px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 0.9rem; font-weight: bold; color: #2b6cb0; }
+
+    /* SQL 영역 */
+    .sql-output { width: 100%; height: 180px; font-family: "Consolas", monospace; padding: 12px; background: #1a202c; color: #63b3ed; border-radius: 8px; font-size: 0.9rem; border: none; }
+
+    /* 공통 버튼 */
+    .action-btn { background: #3182ce; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 0.95rem; margin-top: 12px; }
+    .action-btn:hover { background: #2b6cb0; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  
+  <!-- Step 1: 텍스트 수정 및 키워드 모아보기 -->
+  <div class="card">
+    <h2>1. 스토리 텍스트 편집 (특수 줄 모아보기)</h2>
+    <div class="editor-layout">
+      <textarea id="rawText" placeholder="텍스트를 붙여넣으세요...&#10;&#10;[장소: 강당]&#10;캐릭터A&#10;안녕하세요!&#10;&#10;캐릭터B&#10;반갑습니다.&#10;&#10;[CG: cg_event_01.png]&#10;캐릭터A&#10;오늘 날씨가 좋네요."></textarea>
+      <div class="keyword-sidebar">
+        <div class="keyword-title">📌 키워드 감지 줄 ([장소], [CG] 등)</div>
+        <div id="keywordList"></div>
+      </div>
+    </div>
+    <button class="action-btn" onclick="parseTextToGrid()">Step 2. 엑셀 형태 그리드로 변환 ↓</button>
+  </div>
+
+  <!-- Step 2: 웹 스프레드시트 (AG Grid) -->
+  <div class="card">
+    <h2>2. 작업용 스프레드시트 (셀 직접 수정 및 검수)</h2>
+    <div id="myGrid" class="ag-theme-alpine"></div>
+  </div>
+
+  <!-- Step 3: DB 테이블 선택 및 SQLite SQL 생성 -->
+  <div class="card">
+    <h2>3. Turso / SQLite Batch SQL 변환</h2>
+    
+    <div class="table-selection-zone">
+      <div>
+        <strong>기본 테이블 선택:</strong>
+        <div class="btn-group" style="margin-top: 6px;">
+          <button class="btn-table" onclick="selectTable('campaigns')">campaigns</button>
+          <button class="btn-table" onclick="selectTable('campaign_units')">campaign_units</button>
+          <button class="btn-table" onclick="selectTable('episodes')">episodes</button>
+          <button class="btn-table" onclick="selectTable('episode_characters')">episode_characters</button>
+          <button class="btn-table" onclick="selectTable('cgs')">cgs</button>
+          <button class="btn-table" onclick="selectTable('scripts')">scripts</button>
+          <button class="btn-table" onclick="selectTable('mini_events')">mini_events</button>
+          <button id="musicToggleBtn" class="music-toggle" onclick="toggleMusic()">+ _music 붙이기</button>
+        </div>
+      </div>
+
+      <div style="margin-top: 8px;">
+        <strong>적용할 Target Table 이름:</strong>
+        <input type="text" id="targetTableName" class="input-table-name" value="scripts" placeholder="테이블명 입력...">
+      </div>
+    </div>
+
+    <button class="action-btn" onclick="generateTursoSQL()">Batch SQL 생성하기</button>
+
+    <div style="margin-top: 16px;">
+      <textarea id="sqlResult" class="sql-output" readonly placeholder="여기에 생성된 INSERT SQL문이 표시됩니다..."></textarea>
+      <button class="action-btn" style="background: #38a169;" onclick="copySQL()">SQL 클립보드 복사</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // --- Step 1: 텍스트 에디터 & 키워드 감지 로직 ---
+  const rawTextEl = document.getElementById('rawText');
+  const keywordListEl = document.getElementById('keywordList');
+
+  // 대괄호 [ ... ] 가 들어간 패턴 감지
+  const KEYWORD_REGEX = /\[.*?\]/g;
+
+  rawTextEl.addEventListener('input', updateKeywordSidebar);
+
+  function updateKeywordSidebar() {
+    const lines = rawTextEl.value.split('\n');
+    keywordListEl.innerHTML = '';
+
+    lines.forEach((line, index) => {
+      if (KEYWORD_REGEX.test(line)) {
+        const item = document.createElement('div');
+        item.className = 'keyword-item';
+        item.innerText = `L${index + 1}: ${line.trim()}`;
+        item.onclick = () => jumpToLine(index);
+        keywordListEl.appendChild(item);
+      }
+      KEYWORD_REGEX.lastIndex = 0;
+    });
+  }
+
+  function jumpToLine(lineIndex) {
+    const lines = rawTextEl.value.split('\n');
+    let pos = 0;
+    for (let i = 0; i < lineIndex; i++) {
+      pos += lines[i].length + 1;
+    }
+    rawTextEl.focus();
+    rawTextEl.setSelectionRange(pos, pos + lines[lineIndex].length);
+  }
+
+  // --- Step 2: 파이썬 로직 이식 & AG Grid 연결 ---
+  let gridApi;
+  const gridOptions = {
+    columnDefs: [
+      { field: "name", headerName: "이름 (Name)", editable: true, width: 200 },
+      { field: "dialogue", headerName: "대사 (Dialogue)", editable: true, flex: 1 }
+    ],
+    defaultColDef: { resizable: true, sortable: true },
+    rowData: []
+  };
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const gridDiv = document.querySelector('#myGrid');
+    gridApi = agGrid.createGrid(gridDiv, gridOptions);
+    updateKeywordSidebar(); // 초기 키워드 검사
+  });
+
+  // 파이썬 convert_text_to_csv 로직 동일 구현
+  function parseTextToGrid() {
+    const lines = rawTextEl.value.split('\n').map(l => l.trim());
+    const dataPairs = [];
+
+    // 파이썬의 range(0, len(lines), 3) 과 동일한 흐름
+    for (let i = 0; i < lines.length; i += 3) {
+      if (i + 1 < lines.length) {
+        const name = lines[i];
+        const dialogue = lines[i + 1];
+        // 빈 줄이 아닌 의미 있는 데이터일 때 추가
+        if (name || dialogue) {
+          dataPairs.push({ name: name, dialogue: dialogue });
+        }
+      }
+    }
+
+    gridApi.setGridOption('rowData', dataPairs);
+  }
+
+  // --- Step 3: 테이블 선택 & SQL 생성기 ---
+  let selectedBaseTable = 'scripts';
+  let isMusicAttached = false;
+
+  const targetInput = document.getElementById('targetTableName');
+  const musicToggleBtn = document.getElementById('musicToggleBtn');
+
+  function selectTable(tableName) {
+    selectedBaseTable = tableName;
+    
+    // 버튼 active 스타일 업데이트
+    document.querySelectorAll('.btn-table').forEach(btn => {
+      btn.classList.toggle('active', btn.innerText === tableName);
+    });
+
+    updateTargetInput();
+  }
+
+  function toggleMusic() {
+    isMusicAttached = !isMusicAttached;
+    musicToggleBtn.classList.toggle('active', isMusicAttached);
+    updateTargetInput();
+  }
+
+  function updateTargetInput() {
+    targetInput.value = selectedBaseTable + (isMusicAttached ? '_music' : '');
+  }
+
+  function generateTursoSQL() {
+    const rowData = [];
+    gridApi.forEachNode(node => rowData.push(node.data));
+
+    if (rowData.length === 0) {
+      alert("변환할 그리드 데이터가 없습니다. 먼저 Step 2 변환을 진행하세요.");
+      return;
+    }
+
+    const tableName = targetInput.value.trim() || 'scripts';
+
+    let sql = "BEGIN TRANSACTION;\n";
+    sql += `INSERT INTO ${tableName} (speaker, dialogue) VALUES\n`;
+
+    const values = rowData.map(row => {
+      // SQL Single Quote (') 이스케이프 처리
+      const speaker = (row.name || '').replace(/'/g, "''");
+      const dialogue = (row.dialogue || '').replace(/'/g, "''");
+      return `  ('${speaker}', '${dialogue}')`;
+    });
+
+    sql += values.join(",\n") + ";\n";
+    sql += "COMMIT;";
+
+    document.getElementById('sqlResult').value = sql;
+  }
+
+  function copySQL() {
+    const sqlText = document.getElementById('sqlResult');
+    if (!sqlText.value) {
+      alert("복사할 SQL이 없습니다. 먼저 생성 버튼을 누르세요.");
+      return;
+    }
+    sqlText.select();
+    document.execCommand('copy');
+    alert('SQL이 클립보드에 복사되었습니다! Turso 콘솔에 붙여넣으세요.');
+  }
+</script>
+</body>
+</html>
