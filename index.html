@@ -325,8 +325,7 @@
       return;
     }
 
-    let sql = "BEGIN TRANSACTION;\n";
-    sql += `INSERT INTO ${tableName} VALUES\n`;
+    let sql = `INSERT INTO ${tableName} VALUES\n`;
     sql += values.join(",\n") + ";\n";
     sql += "COMMIT;";
 
