@@ -327,7 +327,6 @@
 
     let sql = `INSERT INTO ${tableName} VALUES\n`;
     sql += values.join(",\n") + ";\n";
-    sql += "COMMIT;";
 
     document.getElementById('sqlResult').value = sql;
   }
