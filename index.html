@@ -309,24 +309,36 @@
 
     const tableName = targetInput.value.trim() || 'scripts';
     const lines = sheetText.split('\n');
-    const values = [];
-
-    lines.forEach(line => {
-      if (!line.trim()) return;
-      // 스프레드시트에서 복사한 데이터는 Tab(\t) 문자로 구분됨
-      const cols = line.split('\t').map(c => c.trim().replace(/^"(.*)"$/, '$1'));
-      
-      const formattedCols = cols.map(col => `'${col.replace(/'/g, "''")}'`);
-      values.push(`  (${formattedCols.join(', ')})`);
-    });
-
-    if (values.length === 0) {
+    
+    if (lines.length === 0) {
       alert("변환할 데이터가 없습니다.");
       return;
     }
 
-    let sql = `INSERT INTO ${tableName} VALUES\n`;
-    sql += values.join(",\n") + ";\n";
+    // 첫 번째 줄은 컬럼 헤더로 사용
+    const headerCols = lines[0].split('\t').map(c => `[${c.trim().replace(/^"(.*)"$/, '$1')}]`);
+    const dataLines = lines.slice(1);
+
+    const values = [];
+
+    dataLines.forEach(line => {
+      if (!line.trim()) return;
+      const cols = line.split('\t').map(c => c.trim().replace(/^"(.*)"$/, '$1'));
+      
+      const formattedCols = cols.map(col => {
+        // 대소문자 상관없이 'NULL' 이거나 빈 값인 경우 따옴표 없는 NULL 키워드로 변환
+        if (!col || col.toUpperCase() === 'NULL') {
+          return 'NULL';
+        }
+        return `'${col.replace(/'/g, "''")}'`;
+      });
+      
+      values.push(`    (${formattedCols.join(', ')})`);
+    });
+
+    // 테이블명 및 컬럼명 대괄호([ ]) 감싸기 및 NULL 키워드 처리
+    let sql = `INSERT INTO [${tableName}] (${headerCols.join(', ')}) VALUES\n`;
+    sql += values.join(",\n") + ";";
 
     document.getElementById('sqlResult').value = sql;
   }
